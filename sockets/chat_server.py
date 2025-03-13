@@ -1,42 +1,38 @@
-import socket
-import threading
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from starlette.responses import FileResponse 
 
-HOST = '127.0.0.1'
-PORT = 12345
 
-server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server_socket.bind((HOST, PORT))
-server_socket.listen()
+app = FastAPI()
 
-clients = []  # Список активних клієнтів
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
 
-def handle_client(client_socket):
-    while True:
-        try:
-            message = client_socket.recv(1024)
-            if not message:
-                break  # Вихід при втраті з'єднання
-            broadcast(message, client_socket)
-        except:
-            break  # Вихід при помилці
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
 
-    client_socket.close()
-    clients.remove(client_socket)  # Видаляємо клієнта зі списку
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
 
-def broadcast(message, sender_socket):
-    for client in clients:
-        if client != sender_socket:
-            try:
-                client.sendall(message)
-            except:
-                client.close()
-                clients.remove(client)
+    async def broadcast(self, message: str):
+        for connection in self.active_connections:
+            await connection.send_text(message)
 
-print(f"Сервер запущений на {HOST}:{PORT}")
+manager = ConnectionManager()
 
-while True:
-    client_socket, client_address = server_socket.accept()
-    print(f"Підключився новий клієнт: {client_address}")
-    clients.append(client_socket)
-    thread = threading.Thread(target=handle_client, args=(client_socket,))
-    thread.start()
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await manager.broadcast(f"Користувач: {data}")
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+
+
+
+@app.get("/")
+async def read_index():
+    return FileResponse('index.html')
